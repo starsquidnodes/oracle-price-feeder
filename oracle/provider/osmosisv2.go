@@ -117,7 +117,7 @@ func NewOsmosisV2Provider(
 func (p *OsmosisV2Provider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-
+	// TODO actually send a subscribe message
 	p.setSubscribedPairs(cps...)
 	return nil
 }

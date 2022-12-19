@@ -11,7 +11,7 @@ var ProviderAndCurrencyPairsFixture = []struct {
 }{
 	{
 		provider:      provider.ProviderBinanceUS,
-		currencyPairs: []types.CurrencyPair{{Base: "ATOM", Quote: "USDT"}},
+		currencyPairs: []types.CurrencyPair{{Base: "ATOM", Quote: "USD"}},
 	},
 	{
 		provider:      provider.ProviderMexc,
@@ -21,17 +21,17 @@ var ProviderAndCurrencyPairsFixture = []struct {
 		provider:      provider.ProviderKraken,
 		currencyPairs: []types.CurrencyPair{{Base: "ATOM", Quote: "USDT"}},
 	},
-	{
-		provider: provider.ProviderOsmosisV2,
-		currencyPairs: []types.CurrencyPair{
-			{Base: "OSMO", Quote: "ATOM"},
-			{Base: "ATOM", Quote: "JUNO"},
-			{Base: "ATOM", Quote: "STARGAZE"},
-			{Base: "OSMO", Quote: "WBTC"},
-			{Base: "OSMO", Quote: "WETH"},
-			{Base: "OSMO", Quote: "CRO"},
-		},
-	},
+	// {
+	// 	provider: provider.ProviderOsmosisV2,
+	// 	currencyPairs: []types.CurrencyPair{
+	// 		{Base: "OSMO", Quote: "ATOM"},
+	// 		{Base: "ATOM", Quote: "JUNO"},
+	// 		{Base: "ATOM", Quote: "STARGAZE"},
+	// 		{Base: "OSMO", Quote: "WBTC"},
+	// 		{Base: "OSMO", Quote: "WETH"},
+	// 		{Base: "OSMO", Quote: "CRO"},
+	// 	},
+	// },
 	{
 		provider:      provider.ProviderCoinbase,
 		currencyPairs: []types.CurrencyPair{{Base: "ATOM", Quote: "USDT"}},
