@@ -264,8 +264,13 @@ func (wsc *WebsocketController) reconnect() {
 // pingHandler is called by the websocket library whenever a ping message is received
 // and responds with a pong message to the server
 func (wsc *WebsocketController) pingHandler(appData string) error {
-	if err := wsc.client.WriteMessage(websocket.PongMessage, []byte("pong")); err != nil {
-		wsc.logger.Error().Err(err).Msg("error sending pong")
+	wsc.mtx.Lock()
+	defer wsc.mtx.Unlock()
+
+	if wsc.client != nil {
+		if err := wsc.client.WriteMessage(websocket.PongMessage, []byte("pong")); err != nil {
+			wsc.logger.Error().Err(err).Msg("error sending pong")
+		}
 	}
 	return nil
 }
