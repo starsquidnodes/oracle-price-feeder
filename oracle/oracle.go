@@ -224,7 +224,7 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 				candles, err = priceProvider.GetCandlePrices(currencyPairs...)
 				if err != nil {
 					telemetry.IncrCounter(1, "failure", "provider", "type", "candle")
-					errCh <- err
+					o.logger.Debug().Err(err).Msg("failed to get candle prices from provider")
 				}
 			}()
 
@@ -265,17 +265,15 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 		providerPrices,
 		o.providerPairs,
 		o.deviations,
+		requiredRates,
 	)
 	if err != nil {
 		return err
 	}
 
-	if len(computedPrices) != len(requiredRates) {
-		return fmt.Errorf("unable to get prices for all exchange candles")
-	}
 	for base := range requiredRates {
 		if _, ok := computedPrices[base]; !ok {
-			return fmt.Errorf("reported prices were not equal to required rates, missed: %s", base)
+			o.logger.Warn().Str("asset", base).Msg("unable to report price for expected asset")
 		}
 	}
 
@@ -293,7 +291,8 @@ func GetComputedPrices(
 	providerPrices provider.AggregatedProviderPrices,
 	providerPairs map[provider.Name][]types.CurrencyPair,
 	deviations map[string]sdk.Dec,
-) (prices map[string]sdk.Dec, err error) {
+	requiredRates map[string]struct{},
+) (map[string]sdk.Dec, error) {
 	// convert any non-USD denominated candles into USD
 	convertedCandles, err := convertCandlesToUSD(
 		logger,
@@ -316,42 +315,48 @@ func GetComputedPrices(
 	}
 
 	// attempt to use candles for TVWAP calculations
-	tvwapPrices, err := ComputeTVWAP(filteredCandles)
+	prices, err := ComputeTVWAP(filteredCandles)
+	if err != nil {
+		return nil, err
+	}
+
+	convertedTickers, err := convertTickersToUSD(
+		logger,
+		providerPrices,
+		providerPairs,
+		deviations,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	filteredProviderPrices, err := FilterTickerDeviations(
+		logger,
+		convertedTickers,
+		deviations,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vwapPrices, err := ComputeVWAP(filteredProviderPrices)
 	if err != nil {
 		return nil, err
 	}
 
 	// If TVWAP candles are not available or were filtered out due to staleness,
 	// use most recent prices & VWAP instead.
-	if len(tvwapPrices) == 0 {
-		convertedTickers, err := convertTickersToUSD(
-			logger,
-			providerPrices,
-			providerPairs,
-			deviations,
-		)
-		if err != nil {
-			return nil, err
+	for rate := range requiredRates {
+		_, ok := prices[rate]
+		if !ok {
+			vwapPrice, ok := vwapPrices[rate]
+			if ok {
+				prices[rate] = vwapPrice
+			}
 		}
-
-		filteredProviderPrices, err := FilterTickerDeviations(
-			logger,
-			convertedTickers,
-			deviations,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		vwapPrices, err := ComputeVWAP(filteredProviderPrices)
-		if err != nil {
-			return nil, err
-		}
-
-		return vwapPrices, nil
 	}
 
-	return tvwapPrices, nil
+	return prices, nil
 }
 
 // SetProviderTickerPricesAndCandles flattens and collects prices for
@@ -579,7 +584,12 @@ func (o *Oracle) tick(ctx context.Context) error {
 		return err
 	}
 
-	exchangeRatesStr := GenerateExchangeRatesString(o.GetPrices())
+	prices := o.GetPrices()
+	if len(prices) == 0 {
+		o.logger.Warn().Msg("no prices to submit")
+		return nil
+	}
+	exchangeRatesStr := GenerateExchangeRatesString(prices)
 	hash := oracletypes.GetAggregateVoteHash(salt, exchangeRatesStr, valAddr)
 	preVoteMsg := &oracletypes.MsgAggregateExchangeRatePrevote{
 		Hash:      hash.String(), // hash of prices from the oracle
