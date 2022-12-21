@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	osmosisV2WSHost   = "api.osmo-api.network.umee.cc"
 	osmosisV2WSPath   = "ws"
-	osmosisV2RestHost = "https://api.osmo-api.network.umee.cc"
 	osmosisV2RestPath = "/assetpairs"
 )
 
@@ -70,14 +68,6 @@ func NewOsmosisV2Provider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*OsmosisV2Provider, error) {
-	if endpoints.Name != ProviderOsmosisV2 {
-		endpoints = Endpoint{
-			Name:      ProviderOsmosisV2,
-			Rest:      osmosisV2RestHost,
-			Websocket: osmosisV2WSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -101,8 +91,9 @@ func NewOsmosisV2Provider(
 		ctx,
 		ProviderOsmosisV2,
 		wsURL,
-		[]interface{}{""},
+		pairs,
 		provider.messageReceived,
+		nil,
 		defaultPingDuration,
 		websocket.PingMessage,
 		osmosisV2Logger,
@@ -117,7 +108,7 @@ func NewOsmosisV2Provider(
 func (p *OsmosisV2Provider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	// TODO actually send a subscribe message
+	
 	p.setSubscribedPairs(cps...)
 	return nil
 }

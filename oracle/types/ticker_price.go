@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
@@ -10,6 +11,7 @@ import (
 type TickerPrice struct {
 	Price  sdk.Dec // last trade price
 	Volume sdk.Dec // 24h volume
+	Time time.Time // data timestamp
 }
 
 // NewTickerPrice parses the lastPrice and volume to a decimal and returns a TickerPrice

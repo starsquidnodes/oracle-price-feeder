@@ -15,9 +15,7 @@ import (
 )
 
 const (
-	mexcWSHost   = "wbs.mexc.com"
 	mexcWSPath   = "/raw/ws"
-	mexcRestHost = "https://www.mexc.com"
 	mexcRestPath = "/open/api/v2/market/ticker"
 )
 
@@ -85,14 +83,6 @@ func NewMexcProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*MexcProvider, error) {
-	if (endpoints.Name) != ProviderMexc {
-		endpoints = Endpoint{
-			Name:      ProviderMexc,
-			Rest:      mexcRestHost,
-			Websocket: mexcWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -115,8 +105,9 @@ func NewMexcProvider(
 		ctx,
 		ProviderMexc,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		defaultPingDuration,
 		websocket.PingMessage,
 		mexcLogger,

@@ -224,7 +224,7 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 				candles, err = priceProvider.GetCandlePrices(currencyPairs...)
 				if err != nil {
 					telemetry.IncrCounter(1, "failure", "provider", "type", "candle")
-					o.logger.Debug().Err(err).Msg("failed to get candle prices from provider")
+					errCh <- err
 				}
 			}()
 
@@ -232,7 +232,7 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 			case <-ch:
 				break
 			case err := <-errCh:
-				return err
+				o.logger.Debug().Err(err).Msg("failed to get prices from provider")
 			case <-time.After(o.providerTimeout):
 				telemetry.IncrCounter(1, "failure", "provider", "type", "timeout")
 				return fmt.Errorf("provider timed out: %s", providerName)
@@ -466,6 +466,8 @@ func NewProvider(
 	endpoint provider.Endpoint,
 	providerPairs ...types.CurrencyPair,
 ) (provider.Provider, error) {
+	endpoint.Name = providerName
+	endpoint.SetDefaults()
 	switch providerName {
 	case provider.ProviderBinance:
 		return provider.NewBinanceProvider(ctx, logger, endpoint, false, providerPairs...)

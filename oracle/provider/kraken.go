@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	krakenWSHost                  = "ws.kraken.com"
-	KrakenRestHost                = "https://api.kraken.com"
 	KrakenRestPath                = "/0/public/AssetPairs"
 	krakenEventSystemStatus       = "systemStatus"
 	krakenEventSubscriptionStatus = "subscriptionStatus"
@@ -99,14 +97,6 @@ func NewKrakenProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*KrakenProvider, error) {
-	if endpoints.Name != ProviderKraken {
-		endpoints = Endpoint{
-			Name:      ProviderKraken,
-			Rest:      KrakenRestHost,
-			Websocket: krakenWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -128,8 +118,9 @@ func NewKrakenProvider(
 		ctx,
 		ProviderKraken,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		time.Duration(0),
 		websocket.PingMessage,
 		krakenLogger,

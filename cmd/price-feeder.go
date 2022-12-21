@@ -165,7 +165,17 @@ func priceFeederCmdHandler(cmd *cobra.Command, args []string) error {
 	}
 
 	endpoints := make(map[provider.Name]provider.Endpoint, len(cfg.ProviderEndpoints))
-	for _, endpoint := range cfg.ProviderEndpoints {
+	for _, endpointConfig := range cfg.ProviderEndpoints {
+		pollInterval, err := time.ParseDuration(endpointConfig.PollInterval)
+		if err != nil {
+			return fmt.Errorf("failed to parse provider poll interval: %w", err)
+		}
+		endpoint := provider.Endpoint {
+			Name: endpointConfig.Name,
+			Rest: endpointConfig.Rest,
+			Websocket: endpointConfig.Websocket,
+			PollInterval: pollInterval,
+		}
 		endpoints[endpoint.Name] = endpoint
 	}
 

@@ -17,10 +17,8 @@ import (
 )
 
 const (
-	cryptoWSHost             = "stream.crypto.com"
 	cryptoWSPath             = "/v2/market"
 	cryptoReconnectTime      = time.Second * 30
-	cryptoRestHost           = "https://api.crypto.com"
 	cryptoRestPath           = "/v2/public/get-ticker"
 	cryptoTickerChannel      = "ticker"
 	cryptoCandleChannel      = "candlestick"
@@ -108,14 +106,6 @@ func NewCryptoProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*CryptoProvider, error) {
-	if endpoints.Name != ProviderCrypto {
-		endpoints = Endpoint{
-			Name:      ProviderCrypto,
-			Rest:      cryptoRestHost,
-			Websocket: cryptoWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -138,8 +128,9 @@ func NewCryptoProvider(
 		ctx,
 		ProviderCrypto,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		disabledPingDuration,
 		websocket.PingMessage,
 		cryptoLogger,

@@ -20,9 +20,7 @@ import (
 )
 
 const (
-	coinbaseWSHost    = "ws-feed.exchange.coinbase.com"
 	coinbasePingCheck = time.Second * 28 // should be < 30
-	coinbaseRestHost  = "https://api.exchange.coinbase.com"
 	coinbaseRestPath  = "/products"
 	coinbaseTimeFmt   = "2006-01-02T15:04:05.000000Z"
 	unixMinute        = 60000
@@ -97,13 +95,6 @@ func NewCoinbaseProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*CoinbaseProvider, error) {
-	if endpoints.Name != ProviderCoinbase {
-		endpoints = Endpoint{
-			Name:      ProviderCoinbase,
-			Rest:      coinbaseRestHost,
-			Websocket: coinbaseWSHost,
-		}
-	}
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -126,8 +117,9 @@ func NewCoinbaseProvider(
 		ctx,
 		ProviderCoinbase,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		defaultPingDuration,
 		websocket.PingMessage,
 		coinbaseLogger,

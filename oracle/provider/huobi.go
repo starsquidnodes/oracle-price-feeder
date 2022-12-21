@@ -20,10 +20,8 @@ import (
 )
 
 const (
-	huobiWSHost        = "api-aws.huobi.pro"
 	huobiWSPath        = "/ws"
 	huobiReconnectTime = time.Minute * 2
-	huobiRestHost      = "https://api.huobi.pro"
 	huobiRestPath      = "/market/tickers"
 )
 
@@ -102,14 +100,6 @@ func NewHuobiProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*HuobiProvider, error) {
-	if endpoints.Name != ProviderHuobi {
-		endpoints = Endpoint{
-			Name:      ProviderHuobi,
-			Rest:      huobiRestHost,
-			Websocket: huobiWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -132,8 +122,9 @@ func NewHuobiProvider(
 		ctx,
 		ProviderHuobi,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		disabledPingDuration,
 		websocket.PingMessage,
 		huobiLogger,

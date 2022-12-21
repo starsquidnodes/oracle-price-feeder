@@ -11,7 +11,6 @@ import (
 )
 
 const (
-	osmosisRestURL        = "https://api-osmosis.imperator.co"
 	osmosisTokenEndpoint  = "/tokens/v2"
 	osmosisCandleEndpoint = "/tokens/v2/historical"
 	osmosisPairsEndpoint  = "/pairs/v1/summary"
@@ -59,14 +58,8 @@ type (
 )
 
 func NewOsmosisProvider(endpoint Endpoint) *OsmosisProvider {
-	if endpoint.Name == ProviderOsmosis {
-		return &OsmosisProvider{
-			baseURL: endpoint.Rest,
-			client:  newDefaultHTTPClient(),
-		}
-	}
 	return &OsmosisProvider{
-		baseURL: osmosisRestURL,
+		baseURL: endpoint.Rest,
 		client:  newDefaultHTTPClient(),
 	}
 }

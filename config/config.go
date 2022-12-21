@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -69,7 +68,7 @@ type (
 	// Config defines all necessary price-feeder configuration parameters.
 	Config struct {
 		Server            Server             `toml:"server"`
-		CurrencyPairs     []CurrencyPair     `toml:"currency_pairs" validate:"required,gt=0,dive,required"`
+		CurrencyPairs     []CurrencyPair     `toml:"currency_pairs" validate:"dive"`
 		Deviations        []Deviation        `toml:"deviation_thresholds"`
 		Account           Account            `toml:"account" validate:"required,gt=0,dive,required"`
 		Keyring           Keyring            `toml:"keyring" validate:"required,gt=0,dive,required"`
@@ -78,12 +77,20 @@ type (
 		GasAdjustment     float64            `toml:"gas_adjustment" validate:"required"`
 		GasPrices         string             `toml:"gas_prices" validate:"required"`
 		ProviderTimeout   string             `toml:"provider_timeout"`
-		ProviderEndpoints []provider.Endpoint `toml:"provider_endpoints" validate:"dive"`
+		ProviderPairs []ProviderPairs `toml:"provider_pairs" validate:"dive,required,gt=0"`
+		ProviderEndpoints []ProviderEndpoint `toml:"provider_endpoints" validate:"dive"`
 		ProviderMinOverride bool `toml:"provider_min_override"`
 		EnableServer      bool               `toml:"enable_server"`
 		EnableVoter       bool               `toml:"enable_voter"`
 		Healthchecks      []Healthchecks     `toml:"healthchecks" validate:"dive"`
 		HeightPollInterval string `toml:"height_poll_interval"`
+	}
+
+	ProviderEndpoint struct {
+		Name provider.Name `toml:"name"`
+		Rest string `toml:"rest"`
+		Websocket string `toml:"websocket"`
+		PollInterval string `toml:"poll_interval"`
 	}
 
 	// Server defines the API server configuration.
@@ -93,6 +100,12 @@ type (
 		ReadTimeout    string   `toml:"read_timeout"`
 		VerboseCORS    bool     `toml:"verbose_cors"`
 		AllowedOrigins []string `toml:"allowed_origins"`
+	}
+
+	ProviderPairs struct {
+		Name provider.Name `toml:"name" validate:"required"`
+		Base []string `toml:"base" validate:"required"`
+		Quote string `toml:"quote" validate:"required"`
 	}
 
 	// CurrencyPair defines a price quote of the exchange rate for two different
@@ -181,7 +194,7 @@ func telemetryValidation(sl validator.StructLevel) {
 
 // endpointValidation is custom validation for the ProviderEndpoint struct.
 func endpointValidation(sl validator.StructLevel) {
-	endpoint := sl.Current().Interface().(provider.Endpoint)
+	endpoint := sl.Current().Interface().(ProviderEndpoint)
 
 	if len(endpoint.Name) < 1 || len(endpoint.Rest) < 1 || len(endpoint.Websocket) < 1 {
 		sl.ReportError(endpoint, "endpoint", "Endpoint", "unsupportedEndpointType", "")
@@ -232,55 +245,74 @@ func ParseConfig(configPath string) (Config, error) {
 		cfg.HeightPollInterval = defaultHeightPollInterval.String()
 	}
 
-	pairs := make(map[string]map[provider.Name]struct{})
-	coinQuotes := make(map[string]struct{})
-	for _, cp := range cfg.CurrencyPairs {
-		if _, ok := pairs[cp.Base]; !ok {
-			pairs[cp.Base] = make(map[provider.Name]struct{})
+	pairs := make(map[string]CurrencyPair)
+	bases := make(map[string]map[provider.Name]struct{})
+	quotes := make(map[string]struct{})
+	for _, providerPair := range cfg.ProviderPairs {
+		_, ok := SupportedProviders[providerPair.Name]
+		if !ok {
+			return cfg, fmt.Errorf("unsupported provider: %s", providerPair.Name)
 		}
-		if strings.ToUpper(cp.Quote) != DenomUSD {
-			coinQuotes[cp.Quote] = struct{}{}
+		_, ok = SupportedQuotes[providerPair.Quote]
+		if !ok {
+			return cfg, fmt.Errorf("unsupported quote: %s", providerPair.Quote)
 		}
-		if _, ok := SupportedQuotes[strings.ToUpper(cp.Quote)]; !ok {
-			return cfg, fmt.Errorf("unsupported quote: %s", cp.Quote)
-		}
-
-		for _, provider := range cp.Providers {
-			if _, ok := SupportedProviders[provider]; !ok {
-				return cfg, fmt.Errorf("unsupported provider: %s", provider)
+		quotes[providerPair.Quote] = struct{}{}
+		for _, base := range providerPair.Base {
+			pairId := base + "/" + providerPair.Quote
+			pair, ok := pairs[pairId]
+			if ok {
+				pair.Providers = append(pair.Providers, providerPair.Name)
+			} else {
+				pair = CurrencyPair {
+					Base: base,
+					Quote: providerPair.Quote,
+					Providers: []provider.Name{providerPair.Name},
+				}
 			}
-			pairs[cp.Base][provider] = struct{}{}
+			pairs[pairId] = pair
+			_, ok = bases[base]
+			if !ok {
+				bases[base] = make(map[provider.Name]struct{})
+			}
+			bases[base][providerPair.Name] = struct{}{}
 		}
 	}
 
-	// Use coinQuotes to ensure that any quotes can be converted to USD.
-	for quote := range coinQuotes {
-		for index, pair := range cfg.CurrencyPairs {
-			if pair.Base == quote && pair.Quote == DenomUSD {
-				break
-			}
-			if index == len(cfg.CurrencyPairs)-1 {
+	for quote := range quotes {
+		if quote != DenomUSD {
+			_, ok := bases[quote]
+			if !ok {
 				return cfg, fmt.Errorf("all non-usd quotes require a conversion rate feed")
 			}
 		}
 	}
 
 	if !cfg.ProviderMinOverride {
-		for base, providers := range pairs {
-			if _, ok := pairs[base]["mock"]; !ok && len(providers) < 3 {
+		for base, providers := range bases {
+			_, ok := providers[provider.ProviderMock]
+			if !ok && len(providers) < 3 {
 				return cfg, fmt.Errorf("must have at least three providers for %s", base)
 			}
 		}
 	}
 
 	gatePairs := []string{}
-	for base, providers := range pairs {
-		if _, ok := providers["gate"]; ok {
+	for base, providers := range bases {
+		_, ok := providers[provider.ProviderGate]
+		if ok {
 			gatePairs = append(gatePairs, base)
 		}
 	}
 	if len(gatePairs) > 1 {
 		return cfg, fmt.Errorf("gate provider does not support multiple pairs: %v", gatePairs)
+	}
+
+	cfg.CurrencyPairs = make([]CurrencyPair, len(pairs))
+	i := 0
+	for _, pair := range pairs {
+		cfg.CurrencyPairs[i] = pair
+		i++
 	}
 
 	for _, deviation := range cfg.Deviations {
@@ -291,6 +323,12 @@ func ParseConfig(configPath string) (Config, error) {
 
 		if threshold.GT(maxDeviationThreshold) {
 			return cfg, fmt.Errorf("deviation thresholds must not exceed 3.0")
+		}
+	}
+
+	for i, provider := range cfg.ProviderEndpoints {
+		if provider.PollInterval == "" {
+			cfg.ProviderEndpoints[i].PollInterval = "0s"
 		}
 	}
 

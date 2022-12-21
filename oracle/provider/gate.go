@@ -17,10 +17,8 @@ import (
 )
 
 const (
-	gateWSHost    = "ws.gate.io"
 	gateWSPath    = "/v4"
 	gatePingCheck = time.Second * 28 // should be < 30
-	gateRestHost  = "https://api.gateio.ws"
 	gateRestPath  = "/api/v4/spot/currency_pairs"
 )
 
@@ -108,14 +106,6 @@ func NewGateProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*GateProvider, error) {
-	if endpoints.Name != ProviderGate {
-		endpoints = Endpoint{
-			Name:      ProviderGate,
-			Rest:      gateRestHost,
-			Websocket: gateWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -139,8 +129,9 @@ func NewGateProvider(
 		ctx,
 		ProviderGate,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		defaultPingDuration,
 		websocket.PingMessage,
 		gateLogger,

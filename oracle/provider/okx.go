@@ -17,9 +17,7 @@ import (
 )
 
 const (
-	okxWSHost   = "ws.okx.com:8443"
 	okxWSPath   = "/ws/v5/public"
-	okxRestHost = "https://www.okx.com"
 	okxRestPath = "/api/v5/market/tickers?instType=SPOT"
 )
 
@@ -103,14 +101,6 @@ func NewOkxProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*OkxProvider, error) {
-	if endpoints.Name != ProviderOkx {
-		endpoints = Endpoint{
-			Name:      ProviderOkx,
-			Rest:      okxRestHost,
-			Websocket: okxWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -133,8 +123,9 @@ func NewOkxProvider(
 		ctx,
 		ProviderOkx,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		defaultPingDuration,
 		websocket.PingMessage,
 		okxLogger,

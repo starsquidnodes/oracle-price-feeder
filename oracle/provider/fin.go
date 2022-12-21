@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	finRestURL               = "https://api.kujira.app"
 	finPairsEndpoint         = "/api/coingecko/pairs"
 	finTickersEndpoint       = "/api/coingecko/tickers"
 	finCandlesEndpoint       = "/api/trades/candles"
@@ -63,14 +62,8 @@ type (
 )
 
 func NewFinProvider(endpoint Endpoint) *FinProvider {
-	if endpoint.Name == ProviderFin {
-		return &FinProvider{
-			baseURL: endpoint.Rest,
-			client:  newDefaultHTTPClient(),
-		}
-	}
 	return &FinProvider{
-		baseURL: finRestURL,
+		baseURL: endpoint.Rest,
 		client:  newDefaultHTTPClient(),
 	}
 }

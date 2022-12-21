@@ -1,18 +1,25 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"time"
-	"strings"
+	"net/url"
 	"strconv"
+	"strings"
+	"time"
+	"sync"
 
 	"price-feeder/oracle/types"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
 )
 
 const (
 	defaultTimeout       = 10 * time.Second
+	staleTickersCutoff   = 10 * time.Second
 	providerCandlePeriod = 10 * time.Minute
 
 	ProviderFin		  Name = "fin"
@@ -50,6 +57,18 @@ type (
 		SubscribeCurrencyPairs(...types.CurrencyPair) error
 	}
 
+	provider struct {
+		ctx context.Context
+		endpoints Endpoint
+		logger zerolog.Logger
+		mtx sync.RWMutex
+		pairs map[string]types.CurrencyPair
+		tickers map[string]types.TickerPrice
+		candles map[string][]types.CandlePrice
+		rest *http.Client
+		websocket *WebsocketController
+	}
+
 	// Name name of an oracle provider. Usually it is an exchange
 	// but this can be any provider name that can give token prices
 	// examples.: "binance", "osmosis", "kraken".
@@ -67,15 +86,231 @@ type (
 	// hardcoded rest and websocket api endpoints.
 	Endpoint struct {
 		// Name of the provider, ex. "binance"
-		Name Name `toml:"name"`
-
+		Name Name
 		// Rest endpoint for the provider, ex. "https://api1.binance.com"
-		Rest string `toml:"rest"`
-
+		Rest string
 		// Websocket endpoint for the provider, ex. "stream.binance.com:9443"
-		Websocket string `toml:"websocket"`
+		Websocket string
+		// provider api poll interval
+		PollInterval time.Duration
+		// provider websocket ping duration
+		PingDuration time.Duration
+		// provider websocket ping message type
+		PingType uint
 	}
 )
+
+func (p *provider) Init(
+	ctx context.Context,
+	endpoints Endpoint,
+	logger zerolog.Logger,
+	pairs []types.CurrencyPair,
+	websocketUrl url.URL,
+	websocketMessageHandler MessageHandler,
+	websocketSubscribeHandler SubscribeHandler,
+) {
+	p.ctx = ctx
+	p.endpoints = endpoints
+	p.endpoints.SetDefaults()
+	p.logger = logger.With().Str("provider", p.endpoints.Name.String()).Logger()
+	p.pairs = make(map[string]types.CurrencyPair, len(pairs))
+	for _, pair := range pairs {
+		p.pairs[pair.String()] = pair
+	}
+	p.tickers = make(map[string]types.TickerPrice, len(pairs))
+	p.candles = make(map[string][]types.CandlePrice, len(pairs))
+	p.rest = newDefaultHTTPClient()
+	if p.endpoints.Websocket != "" {
+		p.websocket = NewWebsocketController(
+			ctx,
+			p.endpoints.Name,
+			websocketUrl,
+			pairs,
+			websocketMessageHandler,
+			websocketSubscribeHandler,
+			p.endpoints.PingDuration,
+			p.endpoints.PingType,
+			p.logger,
+		)
+	}
+}
+
+func (p *provider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
+	p.mtx.RLock()
+	defer p.mtx.RUnlock()
+	tickers := make(map[string]types.TickerPrice, len(pairs))
+	for _, pair := range pairs {
+		symbol := pair.String()
+		price, ok := p.tickers[symbol]
+		if !ok {
+			p.logger.Warn().Str("pair", symbol).Msg("missing ticker price for pair")
+		} else {
+			if time.Since(price.Time) > staleTickersCutoff {
+				p.logger.Warn().Str("pair", symbol).Time("time", price.Time).Msg("tickers data is stale")
+			} else {
+				tickers[symbol] = price
+			}
+		}
+	}
+	return tickers, nil
+}
+
+func (p *provider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]types.CandlePrice, error) {
+	p.mtx.RLock()
+	defer p.mtx.RUnlock()
+	candles := make(map[string][]types.CandlePrice, len(pairs))
+	for _, pair := range pairs {
+		symbol := pair.String()
+		candle, ok := p.candles[symbol]
+		if !ok {
+			p.logger.Warn().Str("symbol", symbol).Msg("missing candle prices for pair")
+		} else {
+			candles[symbol] = candle
+		}
+	}
+	return candles, nil
+}
+
+func (p *provider) SubscribeCurrencyPairs(pairs ...types.CurrencyPair) error {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	newPairs := p.addPairs(pairs...)
+	return p.websocket.AddPairs(newPairs)
+}
+
+func (p *provider) addPairs(pairs ...types.CurrencyPair) []types.CurrencyPair {
+	newPairs := []types.CurrencyPair{}
+	for _, pair := range pairs {
+		_, ok := p.pairs[pair.String()]
+		if !ok {
+			newPairs = append(newPairs, pair)
+		}
+	}
+	return newPairs
+}
+
+func (e *Endpoint) SetDefaults() {
+	var defaults Endpoint
+	switch e.Name {
+	case ProviderBinance:
+		defaults = Endpoint{
+			Name: ProviderBinance,
+			Rest: "https://api1.binance.com",
+			Websocket: "stream.binance.com:9443",
+			PollInterval: 6 * time.Second,
+			PingDuration: disabledPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderBinanceUS:
+		defaults = Endpoint{
+			Name: ProviderBinanceUS,
+			Rest: "https://api.binance.us",
+			Websocket: "stream.binance.us:9443",
+			PollInterval: 6 * time.Second,
+			PingDuration: disabledPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderBitget:
+		defaults = Endpoint{
+			Name: ProviderBitget,
+			Rest: "https://api.bitget.com",
+			Websocket: "ws.bitget.com",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.TextMessage,
+		}
+	case ProviderCoinbase:
+		defaults =  Endpoint{
+			Name: ProviderCoinbase,
+			Rest: "https://api.exchange.coinbase.com",
+			Websocket: "ws-feed.exchange.coinbase.com",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderCrypto:
+		defaults = Endpoint{
+			Name: ProviderCrypto,
+			Rest: "https://api.crypto.com",
+			Websocket: "stream.crypto.com",
+			PingDuration: disabledPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderFin:
+		defaults = Endpoint{
+			Name: ProviderFin,
+			Rest: "https://api.kujira.app",
+		}
+	case ProviderGate:
+		defaults = Endpoint{
+			Name: ProviderGate,
+			Rest: "https://api.gateio.ws",
+			Websocket: "ws.gate.io",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderHuobi:
+		defaults = Endpoint{
+			Name: ProviderHuobi,
+			Rest: "api-aws.huobi.pro",
+			Websocket: "https://api.huobi.pro",
+			PingDuration: disabledPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderKraken:
+		defaults = Endpoint{
+			Name: ProviderKraken,
+			Rest: "https://api.kraken.com",
+			Websocket: "ws.kraken.com",
+			PingDuration: disabledPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderMexc:
+		defaults = Endpoint{
+			Name: ProviderMexc,
+			Rest: "https://www.mexc.com",
+			Websocket: "wbs.mexc.com",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderOkx:
+		defaults = Endpoint{
+			Name: ProviderOkx,
+			Rest: "https://www.okx.com",
+			Websocket: "ws.okx.com:8443",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	case ProviderOsmosis:
+		defaults = Endpoint{
+			Name: ProviderOsmosis,
+			Rest: "https://api-osmosis.imperator.co",
+		}
+	case ProviderOsmosisV2:
+		defaults = Endpoint{
+			Name:      ProviderOsmosisV2,
+			Rest:      "https://api.osmo-api.network.umee.cc",
+			Websocket: "api.osmo-api.network.umee.cc",
+			PingDuration: defaultPingDuration,
+			PingType: websocket.PingMessage,
+		}
+	default:
+		return
+	}
+	if e.Rest == "" {
+		e.Rest = defaults.Rest
+	}
+	if e.Websocket == "" {
+		e.Websocket = defaults.Websocket
+	}
+	if e.PollInterval == time.Duration(0) {
+		e.PollInterval = defaults.PollInterval
+	}
+	if e.PingDuration == time.Duration(0) {
+		e.PingDuration = defaults.PingDuration
+	}
+	if e.PingType == 0 {
+		e.PingType = defaults.PingType
+	}
+}
 
 // String cast provider name to string.
 func (n Name) String() string {

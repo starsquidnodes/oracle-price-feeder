@@ -17,10 +17,8 @@ import (
 )
 
 const (
-	bitgetWSHost        = "ws.bitget.com"
 	bitgetWSPath        = "/spot/v1/stream"
 	bitgetReconnectTime = time.Minute * 2
-	bitgetRestHost      = "https://api.bitget.com"
 	bitgetRestPath      = "/api/spot/v1/public/products"
 	tickerChannel       = "ticker"
 	candleChannel       = "candle5m"
@@ -113,14 +111,6 @@ func NewBitgetProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*BitgetProvider, error) {
-	if endpoints.Name != ProviderBitget {
-		endpoints = Endpoint{
-			Name:      ProviderBitget,
-			Rest:      bitgetRestHost,
-			Websocket: bitgetWSHost,
-		}
-	}
-
 	wsURL := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
@@ -143,8 +133,9 @@ func NewBitgetProvider(
 		ctx,
 		ProviderBitget,
 		wsURL,
-		provider.getSubscriptionMsgs(pairs...),
+		pairs,
 		provider.messageReceived,
+		provider.getSubscriptionMsgs,
 		defaultPingDuration,
 		websocket.TextMessage,
 		bitgetLogger,
