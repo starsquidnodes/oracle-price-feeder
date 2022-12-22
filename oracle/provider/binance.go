@@ -200,7 +200,7 @@ func (p *BinanceProvider) setCandlePair(candle BinanceCandle) {
 	candleList := []types.CandlePrice{}
 	candlePrice, err := candle.toCandlePrice()
 	if err != nil {
-		p.logger.Warn().Err(err).Str("symbol", candle.Symbol).Msg("binance failed to convert candle price")
+		p.logger.Warn().Err(err).Str("symbol", candle.Symbol).Msg("failed to convert candle price")
 	} else {
 		candleList = append(candleList, candlePrice)
 	}

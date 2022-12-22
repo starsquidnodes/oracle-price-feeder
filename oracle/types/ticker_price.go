@@ -26,5 +26,5 @@ func NewTickerPrice(provider, symbol, lastPrice, volume string) (TickerPrice, er
 		return TickerPrice{}, fmt.Errorf("failed to parse %s volume (%s) for %s: %w", provider, volume, symbol, err)
 	}
 
-	return TickerPrice{Price: price, Volume: volumeDec}, nil
+	return TickerPrice{Price: price, Volume: volumeDec, Time: time.Now()}, nil
 }

@@ -172,6 +172,9 @@ func (p *provider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]ty
 }
 
 func (p *provider) SubscribeCurrencyPairs(pairs ...types.CurrencyPair) error {
+	if p.endpoints.Websocket == "" {
+		return nil
+	}
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	newPairs := p.addPairs(pairs...)
@@ -250,8 +253,8 @@ func (e *Endpoint) SetDefaults() {
 	case ProviderHuobi:
 		defaults = Endpoint{
 			Name: ProviderHuobi,
-			Rest: "api-aws.huobi.pro",
-			Websocket: "https://api.huobi.pro",
+			Rest: "https://api.huobi.pro",
+			Websocket: "api-aws.huobi.pro",
 			PingDuration: disabledPingDuration,
 			PingType: websocket.PingMessage,
 		}

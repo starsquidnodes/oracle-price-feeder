@@ -1,14 +1,16 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"price-feeder/oracle/types"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -23,8 +25,7 @@ var _ Provider = (*FinProvider)(nil)
 
 type (
 	FinProvider struct {
-		baseURL string
-		client  *http.Client
+		provider
 	}
 
 	FinTickers struct {
@@ -61,99 +62,114 @@ type (
 	}
 )
 
-func NewFinProvider(endpoint Endpoint) *FinProvider {
-	return &FinProvider{
-		baseURL: endpoint.Rest,
-		client:  newDefaultHTTPClient(),
+func NewFinProvider(
+	ctx context.Context,
+	logger zerolog.Logger,
+	endpoints Endpoint,
+	pairs ...types.CurrencyPair,
+) (*FinProvider, error) {
+	provider := &FinProvider{}
+	provider.Init(
+		ctx,
+		endpoints,
+		logger,
+		pairs,
+		url.URL{},
+		nil,
+		nil,
+	)
+	go provider.poll()
+	return provider, nil
+}
+
+func (p *FinProvider) poll() {
+	for {
+		err := p.updateTickers()
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("failed to update tickers")
+		}
+		err = p.updateCandles()
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("failed to update candles")
+		}
+		time.Sleep(p.endpoints.PollInterval)
 	}
 }
 
-func (p FinProvider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
-	path := fmt.Sprintf("%s%s", p.baseURL, finTickersEndpoint)
-	tickerResponse, err := p.client.Get(path)
+func (p *FinProvider) updateTickers() error {
+	path := fmt.Sprintf("%s%s", p.endpoints.Rest, finTickersEndpoint)
+	tickerResponse, err := p.rest.Get(path)
 	if err != nil {
-		return nil, fmt.Errorf("FIN tickers request failed: %w", err)
+		return err
 	}
 	defer tickerResponse.Body.Close()
 	tickerContent, err := ioutil.ReadAll(tickerResponse.Body)
 	if err != nil {
-		return nil, fmt.Errorf("FIN tickers response read failed: %w", err)
+		return err
 	}
 	var tickers FinTickers
 	err = json.Unmarshal(tickerContent, &tickers)
 	if err != nil {
-		return nil, fmt.Errorf("FIN tickers response unmarshal failed: %w", err)
+		return err
 	}
-	tickerSymbolPairs := make(map[string]types.CurrencyPair, len(pairs))
-	for _, pair := range pairs {
-		tickerSymbolPairs[pair.Base+"_"+pair.Quote] = pair
-	}
-	tickerPrices := make(map[string]types.TickerPrice, len(pairs))
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	now := time.Now()
 	for _, ticker := range tickers.Tickers {
-		pair, ok := tickerSymbolPairs[strings.ToUpper(ticker.Symbol)]
+		symbol := strings.ToUpper(strings.ReplaceAll(ticker.Symbol, "_", ""))
+		_, ok := p.pairs[symbol]
 		if !ok {
-			// skip tokens that are not requested
-			continue
+			continue  // FIN does not filter tickers in the response so we do it here
 		}
-		_, ok = tickerPrices[pair.String()]
-		if ok {
-			return nil, fmt.Errorf("FIN tickers response contained duplicate: %s", ticker.Symbol)
-		}
-		tickerPrices[pair.String()] = types.TickerPrice{
+		p.tickers[symbol] = types.TickerPrice{
 			Price: strToDec(ticker.Price), 
 			Volume: strToDec(ticker.Volume),
+			Time: now,
 		}
 	}
-	for _, pair := range pairs {
-		_, ok := tickerPrices[pair.String()]
-		if !ok {
-			return nil, fmt.Errorf("FIN ticker price missing for pair: %s", pair.String())
-		}
-	}
-	return tickerPrices, nil
+	return nil
 }
 
-func (p FinProvider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]types.CandlePrice, error) {
+func (p *FinProvider) updateCandles() error {
 	pairAddresses, err := p.getFinPairAddresses()
 	if err != nil {
-		return nil, fmt.Errorf("FIN pair addresses lookup failed: %w", err)
+		return err
 	}
-	candlePricesPairs := make(map[string][]types.CandlePrice)
-	for _, pair := range pairs {
+	allCandlePrices := make(map[string][]types.CandlePrice, len(p.pairs))
+	for _, pair := range p.pairs {
 		address, ok := pairAddresses[pair.String()]
 		if !ok {
-			return nil, fmt.Errorf("FIN contract address lookup failed for pair: %s", pair.String())
+			return fmt.Errorf("contract address lookup failed for pair: %s", pair.String())
 		}
-		candlePricesPairs[pair.String()] = []types.CandlePrice{}
 		windowEndTime := time.Now()
 		windowStartTime := windowEndTime.Add(-finCandleWindowSizeHours * time.Hour)
 		path := fmt.Sprintf("%s%s?contract=%s&precision=%d&from=%s&to=%s",
-			p.baseURL,
+			p.endpoints.Rest,
 			finCandlesEndpoint,
 			address,
 			finCandleBinSizeMinutes,
 			windowStartTime.Format(time.RFC3339),
 			windowEndTime.Format(time.RFC3339),
 		)
-		candlesResponse, err := p.client.Get(path)
+		candlesResponse, err := p.rest.Get(path)
 		if err != nil {
-			return nil, fmt.Errorf("FIN candles request failed: %w", err)
+			return err
 		}
 		defer candlesResponse.Body.Close()
 		candlesContent, err := ioutil.ReadAll(candlesResponse.Body)
 		if err != nil {
-			return nil, fmt.Errorf("FIN candles response read failed: %w", err)
+			return err
 		}
 		var candles FinCandles
 		err = json.Unmarshal(candlesContent, &candles)
 		if err != nil {
-			return nil, fmt.Errorf("FIN candles response unmarshal failed: %w", err)
+			return err
 		}
 		candlePrices := []types.CandlePrice{}
 		for _, candle := range candles.Candles {
-			timeStamp, err := binToTimeStamp(candle.Bin)
+			timeStamp, err := finBinToTimeStamp(candle.Bin)
 			if err != nil {
-				return nil, fmt.Errorf("FIN candle timestamp failed to parse: %s", candle.Bin)
+				return fmt.Errorf("FIN candle timestamp failed to parse: %w", err)
 			}
 			candlePrices = append(candlePrices, types.CandlePrice{
 				Price:     strToDec(candle.Close),
@@ -161,12 +177,15 @@ func (p FinProvider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]
 				TimeStamp: timeStamp,
 			})
 		}
-		candlePricesPairs[pair.String()] = candlePrices
+		allCandlePrices[pair.String()] = candlePrices
 	}
-	return candlePricesPairs, nil
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	p.candles = allCandlePrices
+	return nil
 }
 
-func (p FinProvider) GetAvailablePairs() (map[string]struct{}, error) {
+func (p *FinProvider) GetAvailablePairs() (map[string]struct{}, error) {
 	finPairs, err := p.getFinPairs()
 	if err != nil {
 		return nil, err
@@ -182,9 +201,9 @@ func (p FinProvider) GetAvailablePairs() (map[string]struct{}, error) {
 	return availablePairs, nil
 }
 
-func (p FinProvider) getFinPairs() (FinPairs, error) {
-	path := fmt.Sprintf("%s%s", p.baseURL, finPairsEndpoint)
-	pairsResponse, err := p.client.Get(path)
+func (p *FinProvider) getFinPairs() (FinPairs, error) {
+	path := fmt.Sprintf("%s%s", p.endpoints.Rest, finPairsEndpoint)
+	pairsResponse, err := p.rest.Get(path)
 	if err != nil {
 		return FinPairs{}, err
 	}
@@ -197,7 +216,7 @@ func (p FinProvider) getFinPairs() (FinPairs, error) {
 	return pairs, nil
 }
 
-func (p FinProvider) getFinPairAddresses() (map[string]string, error) {
+func (p *FinProvider) getFinPairAddresses() (map[string]string, error) {
 	finPairs, err := p.getFinPairs()
 	if err != nil {
 		return nil, err
@@ -209,12 +228,7 @@ func (p FinProvider) getFinPairAddresses() (map[string]string, error) {
 	return pairAddresses, nil
 }
 
-// SubscribeCurrencyPairs performs a no-op since fin does not use websockets
-func (p FinProvider) SubscribeCurrencyPairs(pairs ...types.CurrencyPair) error {
-	return nil
-}
-
-func binToTimeStamp(bin string) (int64, error) {
+func finBinToTimeStamp(bin string) (int64, error) {
 	timeParsed, err := time.Parse(time.RFC3339, bin)
 	if err != nil {
 		return -1, err

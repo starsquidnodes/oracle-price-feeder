@@ -7,10 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 
 	"price-feeder/oracle/types"
@@ -30,14 +28,8 @@ type (
 	//
 	// REF: https://www.gate.io/docs/websocket/index.html
 	GateProvider struct {
-		wsc             *WebsocketController
-		logger          zerolog.Logger
+		provider
 		reconnectTimer  *time.Ticker
-		mtx             sync.RWMutex
-		endpoints       Endpoint
-		tickers         map[string]GateTicker         // Symbol => GateTicker
-		candles         map[string][]GateCandle       // Symbol => GateCandle
-		subscribedPairs map[string]types.CurrencyPair // Symbol => types.CurrencyPair
 	}
 
 	GateTicker struct {
@@ -106,38 +98,24 @@ func NewGateProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*GateProvider, error) {
-	wsURL := url.URL{
+	websocketUrl := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
 		Path:   gateWSPath,
 	}
-
-	gateLogger := logger.With().Str("provider", string(ProviderGate)).Logger()
-
 	provider := &GateProvider{
-		logger:          gateLogger,
 		reconnectTimer:  time.NewTicker(gatePingCheck),
-		endpoints:       endpoints,
-		tickers:         map[string]GateTicker{},
-		candles:         map[string][]GateCandle{},
-		subscribedPairs: map[string]types.CurrencyPair{},
 	}
-
-	provider.setSubscribedPairs(pairs...)
-
-	provider.wsc = NewWebsocketController(
+	provider.Init(
 		ctx,
-		ProviderGate,
-		wsURL,
+		endpoints,
+		logger,
 		pairs,
+		websocketUrl,
 		provider.messageReceived,
 		provider.getSubscriptionMsgs,
-		defaultPingDuration,
-		websocket.PingMessage,
-		gateLogger,
 	)
-	go provider.wsc.Start()
-
+	go provider.websocket.Start()
 	return provider, nil
 }
 
@@ -149,94 +127,6 @@ func (p *GateProvider) getSubscriptionMsgs(cps ...types.CurrencyPair) []interfac
 		subscriptionMsgs = append(subscriptionMsgs, newGateCandleSubscription(gatePair))
 	}
 	return subscriptionMsgs
-}
-
-// SubscribeCurrencyPairs sends the new subscription messages to the websocket
-// and adds them to the providers subscribedPairs array
-func (p *GateProvider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
-
-	newPairs := []types.CurrencyPair{}
-	for _, cp := range cps {
-		if _, ok := p.subscribedPairs[cp.String()]; !ok {
-			newPairs = append(newPairs, cp)
-		}
-	}
-
-	newSubscriptionMsgs := p.getSubscriptionMsgs(newPairs...)
-	if err := p.wsc.AddSubscriptionMsgs(newSubscriptionMsgs); err != nil {
-		return err
-	}
-	p.setSubscribedPairs(newPairs...)
-	return nil
-}
-
-// GetTickerPrices returns the tickerPrices based on the saved map.
-func (p *GateProvider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
-	tickerPrices := make(map[string]types.TickerPrice, len(pairs))
-
-	for _, currencyPair := range pairs {
-		price, err := p.getTickerPrice(currencyPair)
-		if err != nil {
-			return nil, err
-		}
-
-		tickerPrices[currencyPair.String()] = price
-	}
-
-	return tickerPrices, nil
-}
-
-// GetCandlePrices returns the candlePrices based on the saved map
-func (p *GateProvider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]types.CandlePrice, error) {
-	candlePrices := make(map[string][]types.CandlePrice, len(pairs))
-
-	for _, currencyPair := range pairs {
-		gp := currencyPairToGatePair(currencyPair)
-		price, err := p.getCandlePrices(gp)
-		if err != nil {
-			return nil, err
-		}
-
-		candlePrices[currencyPair.String()] = price
-	}
-
-	return candlePrices, nil
-}
-
-func (p *GateProvider) getCandlePrices(key string) ([]types.CandlePrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	candles, ok := p.candles[key]
-	if !ok {
-		return []types.CandlePrice{}, fmt.Errorf("gate failed to get candle prices for %s", key)
-	}
-
-	candleList := []types.CandlePrice{}
-	for _, candle := range candles {
-		cp, err := candle.toCandlePrice()
-		if err != nil {
-			return []types.CandlePrice{}, err
-		}
-
-		candleList = append(candleList, cp)
-	}
-
-	return candleList, nil
-}
-
-func (p *GateProvider) getTickerPrice(cp types.CurrencyPair) (types.TickerPrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	gp := currencyPairToGatePair(cp)
-	if tickerPair, ok := p.tickers[gp]; ok {
-		return tickerPair.toTickerPrice()
-	}
-
-	return types.TickerPrice{}, fmt.Errorf("gate failed to get ticker price for %s", gp)
 }
 
 func (p *GateProvider) messageReceived(messageType int, bz []byte) {
@@ -383,7 +273,11 @@ func (p *GateProvider) messageReceivedCandle(bz []byte) error {
 func (p *GateProvider) setTickerPair(ticker GateTicker) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	p.tickers[ticker.Symbol] = ticker
+	price, err := ticker.toTickerPrice()
+	if err != nil {
+		p.logger.Warn().Err(err).Str("pair", ticker.Symbol).Msg("failed to convert ticker price")
+	}
+	p.tickers[strings.ReplaceAll(ticker.Symbol, "_", "")] = price
 }
 
 func (p *GateProvider) setCandlePair(candle GateCandle) {
@@ -392,22 +286,18 @@ func (p *GateProvider) setCandlePair(candle GateCandle) {
 	// convert gate timestamp seconds -> milliseconds
 	candle.TimeStamp = SecondsToMilli(candle.TimeStamp)
 	staleTime := PastUnixTime(providerCandlePeriod)
-	candleList := []GateCandle{}
-
-	candleList = append(candleList, candle)
+	price, err := candle.toCandlePrice()
+	if err != nil {
+		p.logger.Warn().Err(err).Str("pair", candle.Symbol).Msg("failed to convert candle price")
+	}
+	candleList := []types.CandlePrice{}
+	candleList = append(candleList, price)
 	for _, c := range p.candles[candle.Symbol] {
 		if staleTime < c.TimeStamp {
 			candleList = append(candleList, c)
 		}
 	}
-	p.candles[candle.Symbol] = candleList
-}
-
-// setSubscribedPairs sets N currency pairs to the map of subscribed pairs.
-func (p *GateProvider) setSubscribedPairs(cps ...types.CurrencyPair) {
-	for _, cp := range cps {
-		p.subscribedPairs[cp.String()] = cp
-	}
+	p.candles[strings.ReplaceAll(candle.Symbol, "_", "")] = candleList
 }
 
 // GetAvailablePairs returns all pairs to which the provider can subscribe.

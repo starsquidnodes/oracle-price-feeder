@@ -8,10 +8,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
+	
 	"github.com/rs/zerolog"
 
 	"price-feeder/oracle/types"
@@ -34,14 +32,9 @@ type (
 	//
 	// REF: https://www.coinbase.io/docs/websocket/index.html
 	CoinbaseProvider struct {
-		wsc             *WebsocketController
-		logger          zerolog.Logger
+		provider
 		reconnectTimer  *time.Ticker
-		mtx             sync.RWMutex
-		endpoints       Endpoint
 		trades          map[string][]CoinbaseTrade    // Symbol => []CoinbaseTrade
-		tickers         map[string]CoinbaseTicker     // Symbol => CoinbaseTicker
-		subscribedPairs map[string]types.CurrencyPair // Symbol => types.CurrencyPair
 	}
 
 	// CoinbaseSubscriptionMsg Msg to subscribe to all channels.
@@ -95,37 +88,24 @@ func NewCoinbaseProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*CoinbaseProvider, error) {
-	wsURL := url.URL{
+	websocketUrl := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
 	}
-
-	coinbaseLogger := logger.With().Str("provider", string(ProviderCoinbase)).Logger()
-
 	provider := &CoinbaseProvider{
-		logger:          coinbaseLogger,
 		reconnectTimer:  time.NewTicker(coinbasePingCheck),
-		endpoints:       endpoints,
 		trades:          map[string][]CoinbaseTrade{},
-		tickers:         map[string]CoinbaseTicker{},
-		subscribedPairs: map[string]types.CurrencyPair{},
 	}
-
-	provider.setSubscribedPairs(pairs...)
-
-	provider.wsc = NewWebsocketController(
+	provider.Init(
 		ctx,
-		ProviderCoinbase,
-		wsURL,
+		endpoints,
+		logger,
 		pairs,
+		websocketUrl,
 		provider.messageReceived,
 		provider.getSubscriptionMsgs,
-		defaultPingDuration,
-		websocket.PingMessage,
-		coinbaseLogger,
 	)
-	go provider.wsc.Start()
-
+	go provider.websocket.Start()
 	return provider, nil
 }
 
@@ -142,43 +122,6 @@ func (p *CoinbaseProvider) getSubscriptionMsgs(cps ...types.CurrencyPair) []inte
 	msg := newCoinbaseSubscription(topics...)
 	subscriptionMsgs = append(subscriptionMsgs, msg)
 	return subscriptionMsgs
-}
-
-// SubscribeCurrencyPairs sends the new subscription messages to the websocket
-// and adds them to the providers subscribedPairs array
-func (p *CoinbaseProvider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
-
-	newPairs := []types.CurrencyPair{}
-	for _, cp := range cps {
-		if _, ok := p.subscribedPairs[cp.String()]; !ok {
-			newPairs = append(newPairs, cp)
-		}
-	}
-
-	newSubscriptionMsgs := p.getSubscriptionMsgs(newPairs...)
-	if err := p.wsc.AddSubscriptionMsgs(newSubscriptionMsgs); err != nil {
-		return err
-	}
-	p.setSubscribedPairs(newPairs...)
-	return nil
-}
-
-// GetTickerPrices returns the tickerPrices based on the saved map.
-func (p *CoinbaseProvider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
-	tickerPrices := make(map[string]types.TickerPrice, len(pairs))
-
-	for _, currencyPair := range pairs {
-		price, err := p.getTickerPrice(currencyPair)
-		if err != nil {
-			return nil, err
-		}
-
-		tickerPrices[currencyPair.String()] = price
-	}
-
-	return tickerPrices, nil
 }
 
 // GetCandlePrices returns candles based off of the saved trades map.
@@ -276,18 +219,6 @@ func (p *CoinbaseProvider) GetAvailablePairs() (map[string]struct{}, error) {
 	return availablePairs, nil
 }
 
-func (p *CoinbaseProvider) getTickerPrice(cp types.CurrencyPair) (types.TickerPrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	gp := currencyPairToCoinbasePair(cp)
-	if tickerPair, ok := p.tickers[gp]; ok {
-		return tickerPair.toTickerPrice()
-	}
-
-	return types.TickerPrice{}, fmt.Errorf("coinbase failed to get ticker price for %s", gp)
-}
-
 func (p *CoinbaseProvider) getTradePrices(key string) ([]CoinbaseTrade, error) {
 	p.mtx.RLock()
 	defer p.mtx.RUnlock()
@@ -357,8 +288,12 @@ func (tr CoinbaseTradeResponse) toTrade() CoinbaseTrade {
 func (p *CoinbaseProvider) setTickerPair(ticker CoinbaseTicker) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-
-	p.tickers[ticker.ProductID] = ticker
+	price, err := ticker.toTickerPrice()
+	if err != nil {
+		p.logger.Warn().Err(err).Str("pair", ticker.ProductID).Msg("failed to convert ticker price")
+	} else {
+		p.tickers[strings.ReplaceAll(ticker.ProductID, "-", "")] = price
+	}
 }
 
 // setTradePair takes a CoinbaseTradeResponse, converts its date into unix epoch,
@@ -378,13 +313,6 @@ func (p *CoinbaseProvider) setTradePair(tradeResponse CoinbaseTradeResponse) {
 		}
 	}
 	p.trades[tradeResponse.ProductID] = tradeList
-}
-
-// setSubscribedPairs sets N currency pairs to the map of subscribed pairs.
-func (p *CoinbaseProvider) setSubscribedPairs(cps ...types.CurrencyPair) {
-	for _, cp := range cps {
-		p.subscribedPairs[cp.String()] = cp
-	}
 }
 
 func (ticker CoinbaseTicker) toTickerPrice() (types.TickerPrice, error) {

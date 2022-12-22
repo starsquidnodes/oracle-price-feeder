@@ -7,12 +7,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 
 	"price-feeder/oracle/types"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
 
@@ -34,13 +33,7 @@ type (
 	// REF: https://bitgetlimited.github.io/apidoc/en/spot/#tickers-channel
 	// REF: https://bitgetlimited.github.io/apidoc/en/spot/#candlesticks-channel
 	BitgetProvider struct {
-		wsc             *WebsocketController
-		logger          zerolog.Logger
-		mtx             sync.RWMutex
-		endpoints       Endpoint
-		tickers         map[string]BitgetTicker       // Symbol => BitgetTicker
-		candles         map[string][]BitgetCandle     // Symbol => BitgetCandle
-		subscribedPairs map[string]types.CurrencyPair // Symbol => types.CurrencyPair
+		provider
 	}
 
 	// BitgetSubscriptionMsg Msg to subscribe all at once.
@@ -111,37 +104,22 @@ func NewBitgetProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*BitgetProvider, error) {
-	wsURL := url.URL{
+	websocketUrl := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
 		Path:   bitgetWSPath,
 	}
-
-	bitgetLogger := logger.With().Str("provider", string(ProviderBitget)).Logger()
-
-	provider := &BitgetProvider{
-		logger:          bitgetLogger,
-		endpoints:       endpoints,
-		tickers:         map[string]BitgetTicker{},
-		candles:         map[string][]BitgetCandle{},
-		subscribedPairs: map[string]types.CurrencyPair{},
-	}
-
-	provider.setSubscribedPairs(pairs...)
-
-	provider.wsc = NewWebsocketController(
+	provider := &BitgetProvider{}
+	provider.Init(
 		ctx,
-		ProviderBitget,
-		wsURL,
+		endpoints,
+		logger,
 		pairs,
+		websocketUrl,
 		provider.messageReceived,
 		provider.getSubscriptionMsgs,
-		defaultPingDuration,
-		websocket.TextMessage,
-		bitgetLogger,
 	)
-	go provider.wsc.Start()
-
+	go provider.websocket.Start()
 	return provider, nil
 }
 
@@ -151,57 +129,6 @@ func (p *BitgetProvider) getSubscriptionMsgs(cps ...types.CurrencyPair) []interf
 	subscriptionMsgs = append(subscriptionMsgs, bitgetTickerSubscriptionMsg)
 
 	return subscriptionMsgs
-}
-
-// SubscribeCurrencyPairs sends the new subscription messages to the websocket
-// and adds them to the providers subscribedPairs array
-func (p *BitgetProvider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
-
-	newPairs := []types.CurrencyPair{}
-	for _, cp := range cps {
-		if _, ok := p.subscribedPairs[cp.String()]; !ok {
-			newPairs = append(newPairs, cp)
-		}
-	}
-
-	newSubscriptionMsgs := p.getSubscriptionMsgs(newPairs...)
-	if err := p.wsc.AddSubscriptionMsgs(newSubscriptionMsgs); err != nil {
-		return err
-	}
-	p.setSubscribedPairs(newPairs...)
-	return nil
-}
-
-// GetTickerPrices returns the tickerPrices based on the saved map.
-func (p *BitgetProvider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
-	tickerPrices := make(map[string]types.TickerPrice, len(pairs))
-
-	for _, cp := range pairs {
-		price, err := p.getTickerPrice(cp)
-		if err != nil {
-			return nil, err
-		}
-		tickerPrices[cp.String()] = price
-	}
-
-	return tickerPrices, nil
-}
-
-// GetTickerPrices returns the tickerPrices based on the saved map.
-func (p *BitgetProvider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]types.CandlePrice, error) {
-	candlePrices := make(map[string][]types.CandlePrice, len(pairs))
-
-	for _, cp := range pairs {
-		price, err := p.getCandlePrices(cp)
-		if err != nil {
-			return nil, err
-		}
-		candlePrices[cp.String()] = price
-	}
-
-	return candlePrices, nil
 }
 
 // messageReceived handles the received data from the Bitget websocket.
@@ -288,61 +215,31 @@ func (bcr BitgetCandleResponse) ToBitgetCandle() (BitgetCandle, error) {
 func (p *BitgetProvider) setTickerPair(ticker BitgetTicker) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	p.tickers[ticker.Arg.InstID] = ticker
+	price, err := ticker.toTickerPrice()
+	if err != nil {
+		p.logger.Warn().Err(err).Str("pair", ticker.Arg.InstID).Msg("failed to convert ticker price")
+	} else {
+		p.tickers[strings.ReplaceAll(ticker.Arg.InstID, "_", "")] = price
+	}
 }
 
 func (p *BitgetProvider) setCandlePair(candle BitgetCandle) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	staleTime := PastUnixTime(providerCandlePeriod)
-	candleList := []BitgetCandle{}
-	candleList = append(candleList, candle)
-
+	candleList := []types.CandlePrice{}
+	price, err := candle.toCandlePrice()
+	if err != nil {
+		p.logger.Warn().Err(err).Str("symbol", candle.Arg.InstID).Msg("failed to convert candle price")
+	} else {
+		candleList = append(candleList, price)
+	}
 	for _, c := range p.candles[candle.Arg.InstID] {
 		if staleTime < c.TimeStamp {
 			candleList = append(candleList, c)
 		}
 	}
 	p.candles[candle.Arg.InstID] = candleList
-}
-
-func (p *BitgetProvider) getTickerPrice(cp types.CurrencyPair) (types.TickerPrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	ticker, ok := p.tickers[cp.String()]
-	if !ok {
-		return types.TickerPrice{}, fmt.Errorf("bitget failed to get ticker price for %s", cp.String())
-	}
-
-	return ticker.toTickerPrice()
-}
-
-func (p *BitgetProvider) getCandlePrices(cp types.CurrencyPair) ([]types.CandlePrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	candles, ok := p.candles[cp.String()]
-	if !ok {
-		return []types.CandlePrice{}, fmt.Errorf("failed to get candles price for %s", cp.String())
-	}
-
-	candleList := []types.CandlePrice{}
-	for _, candle := range candles {
-		cp, err := candle.toCandlePrice()
-		if err != nil {
-			return []types.CandlePrice{}, err
-		}
-		candleList = append(candleList, cp)
-	}
-	return candleList, nil
-}
-
-// setSubscribedPairs sets N currency pairs to the map of subscribed pairs.
-func (p *BitgetProvider) setSubscribedPairs(cps ...types.CurrencyPair) {
-	for _, cp := range cps {
-		p.subscribedPairs[cp.String()] = cp
-	}
 }
 
 // GetAvailablePairs returns all pairs to which the provider can subscribe.

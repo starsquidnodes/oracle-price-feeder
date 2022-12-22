@@ -3,11 +3,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"price-feeder/oracle/types"
@@ -36,13 +34,7 @@ type (
 	//
 	// REF: https://exchange-docs.crypto.com/spot/index.html#introduction
 	CryptoProvider struct {
-		wsc             *WebsocketController
-		logger          zerolog.Logger
-		mtx             sync.RWMutex
-		endpoints       Endpoint
-		tickers         map[string]types.TickerPrice   // Symbol => TickerPrice
-		candles         map[string][]types.CandlePrice // Symbol => CandlePrice
-		subscribedPairs map[string]types.CurrencyPair  // Symbol => types.CurrencyPair
+		provider
 	}
 
 	CryptoTickerResponse struct {
@@ -106,37 +98,22 @@ func NewCryptoProvider(
 	endpoints Endpoint,
 	pairs ...types.CurrencyPair,
 ) (*CryptoProvider, error) {
-	wsURL := url.URL{
+	websocketUrl := url.URL{
 		Scheme: "wss",
 		Host:   endpoints.Websocket,
 		Path:   cryptoWSPath,
 	}
-
-	cryptoLogger := logger.With().Str("provider", "crypto").Logger()
-
-	provider := &CryptoProvider{
-		logger:          cryptoLogger,
-		endpoints:       endpoints,
-		tickers:         map[string]types.TickerPrice{},
-		candles:         map[string][]types.CandlePrice{},
-		subscribedPairs: map[string]types.CurrencyPair{},
-	}
-
-	provider.setSubscribedPairs(pairs...)
-
-	provider.wsc = NewWebsocketController(
+	provider := &CryptoProvider{}
+	provider.Init(
 		ctx,
-		ProviderCrypto,
-		wsURL,
+		endpoints,
+		logger,
 		pairs,
+		websocketUrl,
 		provider.messageReceived,
 		provider.getSubscriptionMsgs,
-		disabledPingDuration,
-		websocket.PingMessage,
-		cryptoLogger,
 	)
-	go provider.wsc.Start()
-
+	go provider.websocket.Start()
 	return provider, nil
 }
 
@@ -154,94 +131,6 @@ func (p *CryptoProvider) getSubscriptionMsgs(cps ...types.CurrencyPair) []interf
 		subscriptionMsgs = append(subscriptionMsgs, msg)
 	}
 	return subscriptionMsgs
-}
-
-// SubscribeCurrencyPairs sends the new subscription messages to the websocket
-// and adds them to the providers subscribedPairs array
-func (p *CryptoProvider) SubscribeCurrencyPairs(cps ...types.CurrencyPair) error {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
-
-	newPairs := []types.CurrencyPair{}
-	for _, cp := range cps {
-		if _, ok := p.subscribedPairs[cp.String()]; !ok {
-			newPairs = append(newPairs, cp)
-		}
-	}
-
-	newSubscriptionMsgs := p.getSubscriptionMsgs(newPairs...)
-	if err := p.wsc.AddSubscriptionMsgs(newSubscriptionMsgs); err != nil {
-		return err
-	}
-	p.setSubscribedPairs(newPairs...)
-	return nil
-}
-
-// GetTickerPrices returns the tickerPrices based on the saved map.
-func (p *CryptoProvider) GetTickerPrices(pairs ...types.CurrencyPair) (map[string]types.TickerPrice, error) {
-	tickerPrices := make(map[string]types.TickerPrice, len(pairs))
-
-	for _, cp := range pairs {
-		key := currencyPairToCryptoPair(cp)
-		price, err := p.getTickerPrice(key)
-		if err != nil {
-			return nil, err
-		}
-		tickerPrices[cp.String()] = price
-	}
-
-	return tickerPrices, nil
-}
-
-// GetCandlePrices returns the candlePrices based on the saved map
-func (p *CryptoProvider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]types.CandlePrice, error) {
-	candlePrices := make(map[string][]types.CandlePrice, len(pairs))
-
-	for _, cp := range pairs {
-		key := currencyPairToCryptoPair(cp)
-		prices, err := p.getCandlePrices(key)
-		if err != nil {
-			return nil, err
-		}
-		candlePrices[cp.String()] = prices
-	}
-
-	return candlePrices, nil
-}
-
-func (p *CryptoProvider) getTickerPrice(key string) (types.TickerPrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	ticker, ok := p.tickers[key]
-	if !ok {
-		return types.TickerPrice{}, fmt.Errorf(
-			types.ErrTickerNotFound.Error(),
-			ProviderCrypto,
-			key,
-		)
-	}
-
-	return ticker, nil
-}
-
-func (p *CryptoProvider) getCandlePrices(key string) ([]types.CandlePrice, error) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
-
-	candles, ok := p.candles[key]
-	if !ok {
-		return []types.CandlePrice{}, fmt.Errorf(
-			types.ErrCandleNotFound.Error(),
-			ProviderCrypto,
-			key,
-		)
-	}
-
-	candleList := []types.CandlePrice{}
-	candleList = append(candleList, candles...)
-
-	return candleList, nil
 }
 
 func (p *CryptoProvider) messageReceived(messageType int, bz []byte) {
@@ -269,7 +158,7 @@ func (p *CryptoProvider) messageReceived(messageType int, bz []byte) {
 	if tickerResp.Result.Channel == cryptoTickerChannel {
 		for _, tickerPair := range tickerResp.Result.Data {
 			p.setTickerPair(
-				tickerResp.Result.InstrumentName,
+				strings.ReplaceAll(tickerResp.Result.InstrumentName, "_", ""),
 				tickerPair,
 			)
 			telemetryWebsocketMessage(ProviderCrypto, MessageTypeTicker)
@@ -281,7 +170,7 @@ func (p *CryptoProvider) messageReceived(messageType int, bz []byte) {
 	if candleResp.Result.Channel == cryptoCandleChannel {
 		for _, candlePair := range candleResp.Result.Data {
 			p.setCandlePair(
-				candleResp.Result.InstrumentName,
+				strings.ReplaceAll(candleResp.Result.InstrumentName, "_", ""),
 				candlePair,
 			)
 			telemetryWebsocketMessage(ProviderCrypto, MessageTypeCandle)
@@ -309,7 +198,7 @@ func (p *CryptoProvider) pong(heartbeatResp CryptoHeartbeatResponse) {
 		Method: cryptoHeartbeatReqMethod,
 	}
 
-	if err := p.wsc.SendJSON(heartbeatReq); err != nil {
+	if err := p.websocket.SendJSON(heartbeatReq); err != nil {
 		p.logger.Err(err).Msg("could not send pong message back")
 	}
 }
@@ -359,13 +248,6 @@ func (p *CryptoProvider) setCandlePair(symbol string, candlePair CryptoCandle) {
 	}
 
 	p.candles[symbol] = candleList
-}
-
-// setSubscribedPairs sets N currency pairs to the map of subscribed pairs.
-func (p *CryptoProvider) setSubscribedPairs(cps ...types.CurrencyPair) {
-	for _, cp := range cps {
-		p.subscribedPairs[cp.String()] = cp
-	}
 }
 
 // GetAvailablePairs returns all pairs to which the provider can subscribe.

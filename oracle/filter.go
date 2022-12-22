@@ -12,7 +12,7 @@ import (
 // defaultDeviationThreshold defines how many 𝜎 a provider can be away
 // from the mean without being considered faulty. This can be overridden
 // in the config.
-var defaultDeviationThreshold = sdk.MustNewDecFromStr("1.0")
+var defaultDeviationThreshold = sdk.MustNewDecFromStr("1.5")
 
 // FilterTickerDeviations finds the standard deviations of the prices of
 // all assets, and filters out any providers that are not within 2𝜎 of the mean.

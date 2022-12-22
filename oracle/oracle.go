@@ -246,7 +246,7 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 				success := SetProviderTickerPricesAndCandles(providerName, providerPrices, providerCandles, prices, candles, pair)
 				if !success {
 					mtx.Unlock()
-					return fmt.Errorf("failed to find any exchange rates in provider responses")
+					return fmt.Errorf("no prices found for %s", pair.String())
 				}
 			}
 
@@ -256,7 +256,7 @@ func (o *Oracle) SetPrices(ctx context.Context) error {
 	}
 
 	if err := g.Wait(); err != nil {
-		o.logger.Debug().Err(err).Msg("failed to get ticker prices from provider")
+		o.logger.Debug().Err(err).Msg("failed to get prices")
 	}
 
 	computedPrices, err := GetComputedPrices(
@@ -479,7 +479,7 @@ func NewProvider(
 		return provider.NewKrakenProvider(ctx, logger, endpoint, providerPairs...)
 
 	case provider.ProviderOsmosis:
-		return provider.NewOsmosisProvider(endpoint), nil
+		return provider.NewOsmosisProvider(ctx, logger, endpoint, providerPairs...)
 
 	case provider.ProviderOsmosisV2:
 		return provider.NewOsmosisV2Provider(ctx, logger, endpoint, providerPairs...)
@@ -504,6 +504,9 @@ func NewProvider(
 
 	case provider.ProviderCrypto:
 		return provider.NewCryptoProvider(ctx, logger, endpoint, providerPairs...)
+
+	case provider.ProviderFin:
+		return provider.NewFinProvider(ctx, logger, endpoint, providerPairs...)
 
 	case provider.ProviderMock:
 		return provider.NewMockProvider(), nil
