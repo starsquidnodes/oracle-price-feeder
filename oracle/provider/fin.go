@@ -21,7 +21,13 @@ const (
 	finCandleWindowSizeHours = 240
 )
 
-var _ Provider = (*FinProvider)(nil)
+var (
+	_ Provider = (*FinProvider)(nil)
+	finDefaultEndpoints = Endpoint{
+		Name: ProviderFin,
+		Rest: "https://api.kujira.app",
+	}
+)
 
 type (
 	FinProvider struct {

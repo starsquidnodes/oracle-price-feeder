@@ -24,7 +24,16 @@ const (
 	huobiRestPath      = "/market/tickers"
 )
 
-var _ Provider = (*HuobiProvider)(nil)
+var (
+	_ Provider = (*HuobiProvider)(nil)
+	huobiDefaultEndpoints = Endpoint{
+		Name: ProviderHuobi,
+		Rest: "https://api.huobi.pro",
+		Websocket: "api-aws.huobi.pro",
+		PingDuration: disabledPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// HuobiProvider defines an Oracle provider implemented by the Huobi public

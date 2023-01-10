@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"github.com/rs/zerolog"
+	"github.com/gorilla/websocket"
 	"price-feeder/oracle/types"
 )
 
@@ -16,7 +17,16 @@ const (
 	mexcRestPath = "/open/api/v2/market/ticker"
 )
 
-var _ Provider = (*MexcProvider)(nil)
+var (
+	_ Provider = (*MexcProvider)(nil)
+	mexcDefaultEndpoints = Endpoint{
+		Name: ProviderMexc,
+		Rest: "https://www.mexc.com",
+		Websocket: "wbs.mexc.com",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// MexcProvider defines an Oracle provider implemented by the Mexc public

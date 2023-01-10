@@ -10,6 +10,7 @@ import (
 	"time"
 	"strconv"
 
+	"github.com/gorilla/websocket"
 	"price-feeder/oracle/types"
 	"github.com/rs/zerolog"
 )
@@ -20,7 +21,25 @@ const (
 	binanceRestPathTickers = "/api/v3/ticker"
 )
 
-var _ Provider = (*BinanceProvider)(nil)
+var (
+	_ Provider = (*BinanceProvider)(nil)
+	binanceDefaultEndpoints = Endpoint{
+		Name: ProviderBinance,
+		Rest: "https://api1.binance.com",
+		Websocket: "stream.binance.com:9443",
+		PollInterval: 6 * time.Second,
+		PingDuration: disabledPingDuration,
+		PingType: websocket.PingMessage,
+	}
+	binanceUSDefaultEndpoints = Endpoint{
+		Name: ProviderBinanceUS,
+		Rest: "https://api.binance.us",
+		Websocket: "stream.binance.us:9443",
+		PollInterval: 6 * time.Second,
+		PingDuration: disabledPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// BinanceProvider defines an Oracle provider implemented by the Binance public

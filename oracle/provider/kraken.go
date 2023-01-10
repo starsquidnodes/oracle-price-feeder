@@ -4,23 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
+	"io/ioutil"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	"price-feeder/oracle/types"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
-	"price-feeder/oracle/types"
 )
 
 const (
-	KrakenRestPath                = "/0/public/AssetPairs"
-	krakenEventSystemStatus       = "systemStatus"
+	krakenRestPath = "/0/public/AssetPairs"
+	krakenRestPathTickers = "/0/public/Ticker"
+	krakenEventSystemStatus = "systemStatus"
 	krakenEventSubscriptionStatus = "subscriptionStatus"
 )
 
-var _ Provider = (*KrakenProvider)(nil)
+var (
+	_ Provider = (*KrakenProvider)(nil)
+	krakenDefaultEndpoints = Endpoint{
+		Name: ProviderKraken,
+		Rest: "https://api.kraken.com",
+		Websocket: "ws.kraken.com",
+		PingDuration: disabledPingDuration,
+		PingType: websocket.PingMessage,
+		PollInterval: 6 * time.Second,
+	}
+)
 
 type (
 	// KrakenProvider defines an Oracle provider implemented by the Kraken public
@@ -29,6 +42,10 @@ type (
 	// REF: https://docs.kraken.com/websockets/#overview
 	KrakenProvider struct {
 		provider
+	}
+
+	KrakenTickers struct {
+		Result map[string]KrakenTicker `json:"result"`
 	}
 
 	// KrakenTicker ticker price response from Kraken ticker channel.
@@ -103,15 +120,63 @@ func NewKrakenProvider(
 		provider.messageReceived,
 		provider.getSubscriptionMsgs,
 	)
+	go provider.poll()
 	go provider.websocket.Start()
 	return provider, nil
+}
+
+func (p *KrakenProvider) poll() {
+	for {
+		err := p.updateTickers()
+		if err != nil {
+			p.logger.Warn().Err(err).Msg("failed to update tickers")
+		}
+		time.Sleep(p.endpoints.PollInterval)
+	}
+}
+
+func (p *KrakenProvider) updateTickers() error {
+	url := fmt.Sprintf("%s%s?pair=", p.endpoints.Rest, krakenRestPathTickers)
+	symbols := map[string]string{}
+	for symbol, pair := range p.pairs {
+		krakenSymbol := krakenPairToSymbol(pair)
+		symbols[krakenSymbol] = symbol
+		url += symbol + ","
+	}
+	url = url[:len(url) - 1]
+	tickersResponse, err := p.rest.Get(url)
+	if err != nil {
+		return err
+	}
+	defer tickersResponse.Body.Close()
+	tickersContent, err := ioutil.ReadAll(tickersResponse.Body)
+	if err != nil {
+		return err
+	}
+	var tickers KrakenTickers
+	err = json.Unmarshal(tickersContent, &tickers)
+	if err != nil {
+		return err
+	}
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	for krakenSymbol, ticker := range tickers.Result {
+		price, err := ticker.toTickerPrice(krakenSymbol)
+		if err != nil {
+			p.logger.Warn().Err(err).Str("symbol", krakenSymbol).Msg("failed to convert ticker price")
+		} else {
+			p.tickers[symbols[krakenSymbol]] = price
+		}
+		p.logger.Debug().Str("symbol", symbols[krakenSymbol]).Msg("updated ticker")
+	}
+	return nil
 }
 
 func (p *KrakenProvider) getSubscriptionMsgs(cps ...types.CurrencyPair) []interface{} {
 	subscriptionMsgs := make([]interface{}, 0, len(cps)*2)
 	for _, cp := range cps {
 		krakenPair := currencyPairToKrakenPair(cp)
-		subscriptionMsgs = append(subscriptionMsgs, newKrakenTickerSubscriptionMsg(krakenPair))
+		//subscriptionMsgs = append(subscriptionMsgs, newKrakenTickerSubscriptionMsg(krakenPair))
 		subscriptionMsgs = append(subscriptionMsgs, newKrakenCandleSubscriptionMsg(krakenPair))
 	}
 	return subscriptionMsgs
@@ -344,7 +409,7 @@ func (p *KrakenProvider) setCandlePair(candle KrakenCandle) {
 
 // GetAvailablePairs returns all pairs to which the provider can subscribe.
 func (p *KrakenProvider) GetAvailablePairs() (map[string]struct{}, error) {
-	resp, err := http.Get(p.endpoints.Rest + KrakenRestPath)
+	resp, err := p.rest.Get(p.endpoints.Rest + krakenRestPath)
 	if err != nil {
 		return nil, err
 	}
@@ -420,4 +485,16 @@ func currencyPairToKrakenPair(cp types.CurrencyPair) string {
 // since other providers list bitcoin as BTC.
 func normalizeKrakenBTCPair(ticker string) string {
 	return strings.Replace(ticker, "XBT", "BTC", 1)
+}
+
+func krakenPairToSymbol(pair types.CurrencyPair) string {
+	base := pair.Base
+	if base == "BTC" {
+		base = "XBT"
+	}
+	quote := pair.Quote
+	if quote == "BTC" {
+		quote = "XBT"
+	}
+	return fmt.Sprintf("X%sZ%s", base, quote)
 }

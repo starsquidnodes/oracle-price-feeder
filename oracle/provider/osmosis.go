@@ -19,7 +19,13 @@ const (
 	osmosisPairsEndpoint  = "/pairs/v1/summary"
 )
 
-var _ Provider = (*OsmosisProvider)(nil)
+var (
+	_ Provider = (*OsmosisProvider)(nil)
+	osmosisDefaultEndpoints = Endpoint{
+		Name: ProviderOsmosis,
+		Rest: "https://api-osmosis.imperator.co",
+	}
+)
 
 type (
 	// OsmosisProvider defines an Oracle provider implemented by the Osmosis public

@@ -13,7 +13,6 @@ import (
 	"price-feeder/oracle/types"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
 
@@ -172,12 +171,12 @@ func (p *provider) GetCandlePrices(pairs ...types.CurrencyPair) (map[string][]ty
 }
 
 func (p *provider) SubscribeCurrencyPairs(pairs ...types.CurrencyPair) error {
-	if p.endpoints.Websocket == "" {
-		return nil
-	}
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	newPairs := p.addPairs(pairs...)
+	if p.endpoints.Websocket == "" {
+		return nil
+	}
 	return p.websocket.AddPairs(newPairs)
 }
 
@@ -196,105 +195,31 @@ func (e *Endpoint) SetDefaults() {
 	var defaults Endpoint
 	switch e.Name {
 	case ProviderBinance:
-		defaults = Endpoint{
-			Name: ProviderBinance,
-			Rest: "https://api1.binance.com",
-			Websocket: "stream.binance.com:9443",
-			PollInterval: 6 * time.Second,
-			PingDuration: disabledPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = binanceDefaultEndpoints
 	case ProviderBinanceUS:
-		defaults = Endpoint{
-			Name: ProviderBinanceUS,
-			Rest: "https://api.binance.us",
-			Websocket: "stream.binance.us:9443",
-			PollInterval: 6 * time.Second,
-			PingDuration: disabledPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = binanceUSDefaultEndpoints
 	case ProviderBitget:
-		defaults = Endpoint{
-			Name: ProviderBitget,
-			Rest: "https://api.bitget.com",
-			Websocket: "ws.bitget.com",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.TextMessage,
-		}
+		defaults = bitgetDefaultEndpoints
 	case ProviderCoinbase:
-		defaults =  Endpoint{
-			Name: ProviderCoinbase,
-			Rest: "https://api.exchange.coinbase.com",
-			Websocket: "ws-feed.exchange.coinbase.com",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = coinbaseDefaultEndpoints
 	case ProviderCrypto:
-		defaults = Endpoint{
-			Name: ProviderCrypto,
-			Rest: "https://api.crypto.com",
-			Websocket: "stream.crypto.com",
-			PingDuration: disabledPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = cryptoDefaultEndpoints
 	case ProviderFin:
-		defaults = Endpoint{
-			Name: ProviderFin,
-			Rest: "https://api.kujira.app",
-		}
+		defaults = finDefaultEndpoints
 	case ProviderGate:
-		defaults = Endpoint{
-			Name: ProviderGate,
-			Rest: "https://api.gateio.ws",
-			Websocket: "ws.gate.io",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = gateDefaultEndpoints
 	case ProviderHuobi:
-		defaults = Endpoint{
-			Name: ProviderHuobi,
-			Rest: "https://api.huobi.pro",
-			Websocket: "api-aws.huobi.pro",
-			PingDuration: disabledPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = huobiDefaultEndpoints
 	case ProviderKraken:
-		defaults = Endpoint{
-			Name: ProviderKraken,
-			Rest: "https://api.kraken.com",
-			Websocket: "ws.kraken.com",
-			PingDuration: disabledPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = krakenDefaultEndpoints
 	case ProviderMexc:
-		defaults = Endpoint{
-			Name: ProviderMexc,
-			Rest: "https://www.mexc.com",
-			Websocket: "wbs.mexc.com",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = mexcDefaultEndpoints
 	case ProviderOkx:
-		defaults = Endpoint{
-			Name: ProviderOkx,
-			Rest: "https://www.okx.com",
-			Websocket: "ws.okx.com:8443",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = okxDefaultEndpoints
 	case ProviderOsmosis:
-		defaults = Endpoint{
-			Name: ProviderOsmosis,
-			Rest: "https://api-osmosis.imperator.co",
-		}
+		defaults = osmosisDefaultEndpoints
 	case ProviderOsmosisV2:
-		defaults = Endpoint{
-			Name:      ProviderOsmosisV2,
-			Rest:      "https://api.osmo-api.network.umee.cc",
-			Websocket: "api.osmo-api.network.umee.cc",
-			PingDuration: defaultPingDuration,
-			PingType: websocket.PingMessage,
-		}
+		defaults = osmosisv2DefaultEndpoints
 	default:
 		return
 	}

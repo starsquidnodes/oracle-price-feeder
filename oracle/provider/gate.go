@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
+	"github.com/gorilla/websocket"
 	"price-feeder/oracle/types"
 )
 
@@ -20,7 +20,16 @@ const (
 	gateRestPath  = "/api/v4/spot/currency_pairs"
 )
 
-var _ Provider = (*GateProvider)(nil)
+var (
+	_ Provider = (*GateProvider)(nil)
+	gateDefaultEndpoints = Endpoint{
+		Name: ProviderGate,
+		Rest: "https://api.gateio.ws",
+		Websocket: "ws.gate.io",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// GateProvider defines an Oracle provider implemented by the Gate public

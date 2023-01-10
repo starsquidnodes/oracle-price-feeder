@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	
-	"github.com/rs/zerolog"
 
+	"github.com/rs/zerolog"
+	"github.com/gorilla/websocket"
 	"price-feeder/oracle/types"
 )
 
@@ -18,7 +18,16 @@ const (
 	okxRestPath = "/api/v5/market/tickers?instType=SPOT"
 )
 
-var _ Provider = (*OkxProvider)(nil)
+var (
+	_ Provider = (*OkxProvider)(nil)
+	okxDefaultEndpoints = Endpoint{
+		Name: ProviderOkx,
+		Rest: "https://www.okx.com",
+		Websocket: "ws.okx.com:8443",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// OkxProvider defines an Oracle provider implemented by the Okx public

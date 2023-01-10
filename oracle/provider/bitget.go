@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"price-feeder/oracle/types"
-
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
 
@@ -24,7 +24,16 @@ const (
 	instType            = "SP"
 )
 
-var _ Provider = (*BitgetProvider)(nil)
+var (
+	_ Provider = (*BitgetProvider)(nil)
+	bitgetDefaultEndpoints = Endpoint{
+		Name: ProviderBitget,
+		Rest: "https://api.bitget.com",
+		Websocket: "ws.bitget.com",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.TextMessage,
+	}
+)
 
 type (
 	// BitgetProvider defines an Oracle provider implemented by the Bitget public

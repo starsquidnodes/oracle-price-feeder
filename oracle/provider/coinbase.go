@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"price-feeder/oracle/types"
-
+	"github.com/gorilla/websocket"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
@@ -24,7 +24,16 @@ const (
 	unixMinute        = 60000
 )
 
-var _ Provider = (*CoinbaseProvider)(nil)
+var (
+	_ Provider = (*CoinbaseProvider)(nil)
+	coinbaseDefaultEndpoints = Endpoint{
+		Name: ProviderCoinbase,
+		Rest: "https://api.exchange.coinbase.com",
+		Websocket: "ws-feed.exchange.coinbase.com",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// CoinbaseProvider defines an Oracle provider implemented by the Coinbase public
@@ -341,6 +350,7 @@ func newCoinbaseSubscription(cp ...string) CoinbaseSubscriptionMsg {
 	return CoinbaseSubscriptionMsg{
 		Type:       "subscribe",
 		ProductIDs: cp,
-		Channels:   []string{"matches", "ticker"},
+		// Channels:   []string{"matches", "ticker_batch"},
+		Channels:   []string{"ticker"},
 	}
 }

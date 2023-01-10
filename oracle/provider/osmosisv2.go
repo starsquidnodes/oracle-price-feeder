@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/rs/zerolog"
+	"github.com/gorilla/websocket"
 	"price-feeder/oracle/types"
 )
 
@@ -18,7 +19,16 @@ const (
 	osmosisV2RestPath = "/assetpairs"
 )
 
-var _ Provider = (*OsmosisV2Provider)(nil)
+var (
+	_ Provider = (*OsmosisV2Provider)(nil)
+	osmosisv2DefaultEndpoints = Endpoint{
+		Name:      ProviderOsmosisV2,
+		Rest:      "https://api.osmo-api.network.umee.cc",
+		Websocket: "api.osmo-api.network.umee.cc",
+		PingDuration: defaultPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// OsmosisV2Provider defines an Oracle provider implemented by UMEE's

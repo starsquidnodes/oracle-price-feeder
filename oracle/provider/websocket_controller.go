@@ -145,12 +145,6 @@ func (w *WebsocketController) AddPairs(pairs []types.CurrencyPair) error {
 	return w.subscribe(w.subscribeHandler(pairs...))
 }
 
-// AddSubscriptionMsgs immediately sends the new subscription messages and
-// adds them to the subscriptionMsgs array if successful
-func (wsc *WebsocketController) AddSubscriptionMsgs(msgs []interface{}) error {
-	return wsc.subscribe(msgs)
-}
-
 // SendJSON sends a json message to the websocket connection using the Websocket
 // Controller mutex to ensure multiple writes do not happen at once
 func (wsc *WebsocketController) SendJSON(msg interface{}) error {

@@ -16,7 +16,6 @@ The list of current supported providers:
 - [FIN](https://fin.kujira.app)
 - [Binance](https://www.binance.com/en)
 - [MEXC](https://www.mexc.com/)
-- [Coinbase](https://www.coinbase.com/)
 - [Gate](https://www.gate.io/)
 - [Huobi](https://www.huobi.com/en-us/)
 - [Kraken](https://www.kraken.com/en-us/)

@@ -26,7 +26,16 @@ const (
 	cryptoCandleMsgPrefix    = "candlestick.5m."
 )
 
-var _ Provider = (*CryptoProvider)(nil)
+var (
+	_ Provider = (*CryptoProvider)(nil)
+	cryptoDefaultEndpoints = Endpoint{
+		Name: ProviderCrypto,
+		Rest: "https://api.crypto.com",
+		Websocket: "stream.crypto.com",
+		PingDuration: disabledPingDuration,
+		PingType: websocket.PingMessage,
+	}
+)
 
 type (
 	// CryptoProvider defines an Oracle provider implemented by the Crypto.com public
